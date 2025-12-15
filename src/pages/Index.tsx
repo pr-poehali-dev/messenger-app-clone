@@ -7,9 +7,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import Icon from '@/components/ui/icon';
-import VideoCall from '@/components/VideoCall';
-import AudioCall from '@/components/AudioCall';
-import IncomingCall from '@/components/IncomingCall';
+import AgoraVideoCall from '@/components/AgoraVideoCall';
+import AgoraAudioCall from '@/components/AgoraAudioCall';
+import AgoraIncomingCall from '@/components/AgoraIncomingCall';
 import { api, User, Message, Chat } from '@/lib/api';
 import { toast } from '@/hooks/use-toast';
 
@@ -295,7 +295,7 @@ const Index = () => {
 
       {currentUser && selectedChatUser && (
         <>
-          <VideoCall
+          <AgoraVideoCall
             isOpen={showVideoCall}
             onClose={() => setShowVideoCall(false)}
             currentUserId={currentUser.id}
@@ -303,7 +303,7 @@ const Index = () => {
             recipientName={selectedChatUser.displayName}
           />
 
-          <AudioCall
+          <AgoraAudioCall
             isOpen={showAudioCall}
             onClose={() => setShowAudioCall(false)}
             currentUserId={currentUser.id}
@@ -314,7 +314,7 @@ const Index = () => {
         </>
       )}
 
-      <IncomingCall
+      <AgoraIncomingCall
         callData={incomingCall}
         onAccept={() => {}}
         onReject={() => setIncomingCall(null)}

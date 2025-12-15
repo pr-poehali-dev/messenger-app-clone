@@ -1,18 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
-import SimplePeer from 'simple-peer';
+import AgoraRTC, { IAgoraRTCClient, IMicrophoneAudioTrack, ICameraVideoTrack } from 'agora-rtc-sdk-ng';
 import { Button } from '@/components/ui/button';
 import Icon from '@/components/ui/icon';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { api } from '@/lib/api';
+import { toast } from '@/hooks/use-toast';
 
-interface IncomingCallProps {
+interface AgoraIncomingCallProps {
   callData: {
     id: number;
     callerId: number;
     receiverId: number;
     callType: 'audio' | 'video';
-    signalData: any;
+    signalData: { channelName: string };
     callerDisplayName: string;
     callerAvatar?: string;
   } | null;
@@ -20,19 +21,19 @@ interface IncomingCallProps {
   onReject: () => void;
 }
 
-const IncomingCall = ({ callData, onAccept, onReject }: IncomingCallProps) => {
-  const [peer, setPeer] = useState<SimplePeer.Instance | null>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
+const AgoraIncomingCall = ({ callData, onAccept, onReject }: AgoraIncomingCallProps) => {
+  const [client] = useState<IAgoraRTCClient>(() => AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' }));
+  const [localAudioTrack, setLocalAudioTrack] = useState<IMicrophoneAudioTrack | null>(null);
+  const [localVideoTrack, setLocalVideoTrack] = useState<ICameraVideoTrack | null>(null);
+  const [isAccepted, setIsAccepted] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   const [connectionStatus, setConnectionStatus] = useState('Входящий звонок...');
-  const [isAccepted, setIsAccepted] = useState(false);
+  const [remoteUsers, setRemoteUsers] = useState<Set<number>>(new Set());
   
-  const localVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const localVideoRef = useRef<HTMLDivElement>(null);
+  const remoteVideoRef = useRef<HTMLDivElement>(null);
   const callStartTimeRef = useRef<number | null>(null);
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -48,103 +49,137 @@ const IncomingCall = ({ callData, onAccept, onReject }: IncomingCallProps) => {
     }
   }, [isAccepted, callData]);
 
-  const cleanup = () => {
+  const cleanup = async () => {
     if (durationIntervalRef.current) {
       clearInterval(durationIntervalRef.current);
     }
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
+    
+    if (localAudioTrack) {
+      localAudioTrack.close();
     }
-    if (peer) {
-      peer.destroy();
+    
+    if (localVideoTrack) {
+      localVideoTrack.close();
     }
+    
+    if (client) {
+      await client.leave();
+    }
+    
     setIsAccepted(false);
-    setIsConnected(false);
+    setRemoteUsers(new Set());
   };
 
   const acceptCall = async () => {
     if (!callData) return;
 
     try {
-      setConnectionStatus('Получение доступа к устройствам...');
+      setConnectionStatus('Получение токена...');
       
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: callData.callType === 'video',
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+      const { channelName } = callData.signalData;
+      const { token, appId } = await api.getAgoraToken(channelName, callData.receiverId);
       
-      setStream(mediaStream);
-      if (callData.callType === 'video' && localVideoRef.current) {
-        localVideoRef.current.srcObject = mediaStream;
+      setConnectionStatus('Подключение к каналу...');
+      await client.join(appId, channelName, token, callData.receiverId);
+      
+      setConnectionStatus('Включение устройств...');
+      
+      if (callData.callType === 'video') {
+        const [audioTrack, videoTrack] = await Promise.all([
+          AgoraRTC.createMicrophoneAudioTrack({
+            encoderConfig: 'speech_standard',
+            AEC: true,
+            ANS: true,
+            AGC: true,
+          }),
+          AgoraRTC.createCameraVideoTrack({
+            encoderConfig: '480p_1',
+          })
+        ]);
+        
+        setLocalAudioTrack(audioTrack);
+        setLocalVideoTrack(videoTrack);
+        
+        if (localVideoRef.current) {
+          videoTrack.play(localVideoRef.current);
+        }
+        
+        await client.publish([audioTrack, videoTrack]);
+      } else {
+        const audioTrack = await AgoraRTC.createMicrophoneAudioTrack({
+          encoderConfig: 'speech_standard',
+          AEC: true,
+          ANS: true,
+          AGC: true,
+        });
+        
+        setLocalAudioTrack(audioTrack);
+        await client.publish([audioTrack]);
       }
-      setConnectionStatus('Установка соединения...');
-
-      const peerInstance = new SimplePeer({
-        initiator: false,
-        trickle: false,
-        stream: mediaStream,
-        config: {
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-          ],
-        },
-      });
-
-      peerInstance.on('signal', async (signal) => {
-        try {
-          await api.updateCall(callData.id, 'accepted', signal);
-        } catch (error) {
-          console.error('Error sending answer signal:', error);
-        }
-      });
-
-      peerInstance.on('stream', (remoteStream) => {
-        if (callData.callType === 'video' && remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = remoteStream;
-        } else if (remoteAudioRef.current) {
-          remoteAudioRef.current.srcObject = remoteStream;
-          remoteAudioRef.current.play().catch(err => console.error('Error playing audio:', err));
-        }
+      
+      await api.updateCall(callData.id, 'accepted');
+      
+      setConnectionStatus('Подключено');
+      
+      client.on('user-published', async (user, mediaType) => {
+        await client.subscribe(user, mediaType);
         
-        setIsConnected(true);
-        setConnectionStatus('Подключено');
-        callStartTimeRef.current = Date.now();
-        
-        durationIntervalRef.current = setInterval(() => {
-          if (callStartTimeRef.current) {
-            const duration = Math.floor((Date.now() - callStartTimeRef.current) / 1000);
-            setCallDuration(duration);
+        if (mediaType === 'video') {
+          const remoteVideoTrack = user.videoTrack;
+          if (remoteVideoTrack && remoteVideoRef.current) {
+            remoteVideoTrack.play(remoteVideoRef.current);
           }
-        }, 1000);
+          setRemoteUsers(prev => new Set(prev).add(user.uid as number));
+        }
+        
+        if (mediaType === 'audio') {
+          const remoteAudioTrack = user.audioTrack;
+          remoteAudioTrack?.play();
+          
+          if (!callStartTimeRef.current) {
+            callStartTimeRef.current = Date.now();
+            durationIntervalRef.current = setInterval(() => {
+              if (callStartTimeRef.current) {
+                const duration = Math.floor((Date.now() - callStartTimeRef.current) / 1000);
+                setCallDuration(duration);
+              }
+            }, 1000);
+          }
+        }
       });
-
-      peerInstance.on('connect', () => {
-        setConnectionStatus('Соединено');
-      });
-
-      peerInstance.on('error', (err) => {
-        console.error('Peer error:', err);
-        setConnectionStatus('Ошибка соединения');
-      });
-
-      peerInstance.on('close', () => {
-        handleEndCall();
-      });
-
-      setPeer(peerInstance);
       
-      if (callData.signalData) {
-        peerInstance.signal(callData.signalData);
-      }
+      client.on('user-unpublished', (user) => {
+        setRemoteUsers(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(user.uid as number);
+          return newSet;
+        });
+      });
+      
+      client.on('user-left', (user) => {
+        setRemoteUsers(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(user.uid as number);
+          return newSet;
+        });
+        
+        if (remoteUsers.size === 0) {
+          toast({
+            title: 'Звонок завершен',
+            description: 'Собеседник покинул звонок',
+          });
+          handleEndCall();
+        }
+      });
+      
     } catch (error) {
       console.error('Error accepting call:', error);
-      setConnectionStatus('Ошибка доступа к устройствам');
+      setConnectionStatus('Ошибка подключения');
+      toast({
+        title: 'Ошибка',
+        description: 'Не удалось принять звонок',
+        variant: 'destructive',
+      });
       handleReject();
     }
   };
@@ -158,7 +193,7 @@ const IncomingCall = ({ callData, onAccept, onReject }: IncomingCallProps) => {
     if (callData) {
       await api.updateCall(callData.id, 'rejected');
     }
-    cleanup();
+    await cleanup();
     onReject();
   };
 
@@ -166,24 +201,20 @@ const IncomingCall = ({ callData, onAccept, onReject }: IncomingCallProps) => {
     if (callData) {
       await api.updateCall(callData.id, 'ended');
     }
-    cleanup();
+    await cleanup();
     onReject();
   };
 
-  const toggleMute = () => {
-    if (stream) {
-      stream.getAudioTracks().forEach((track) => {
-        track.enabled = !track.enabled;
-      });
+  const toggleMute = async () => {
+    if (localAudioTrack) {
+      await localAudioTrack.setEnabled(!isMuted);
       setIsMuted(!isMuted);
     }
   };
 
-  const toggleVideo = () => {
-    if (stream) {
-      stream.getVideoTracks().forEach((track) => {
-        track.enabled = !track.enabled;
-      });
+  const toggleVideo = async () => {
+    if (localVideoTrack) {
+      await localVideoTrack.setEnabled(!isVideoOff);
       setIsVideoOff(!isVideoOff);
     }
   };
@@ -210,22 +241,17 @@ const IncomingCall = ({ callData, onAccept, onReject }: IncomingCallProps) => {
       <Dialog open={true} onOpenChange={handleEndCall}>
         <DialogContent className="max-w-4xl h-[80vh] p-0">
           <div className="flex-1 bg-black relative h-full">
-            <video
+            <div 
               ref={remoteVideoRef}
-              autoPlay
-              playsInline
-              className="w-full h-full object-cover"
+              className="w-full h-full"
             />
             
-            <video
+            <div 
               ref={localVideoRef}
-              autoPlay
-              playsInline
-              muted
-              className="absolute bottom-4 right-4 w-48 h-36 object-cover rounded-lg border-2 border-white"
+              className="absolute bottom-4 right-4 w-48 h-36 rounded-lg border-2 border-white overflow-hidden"
             />
 
-            {!isConnected && (
+            {remoteUsers.size === 0 && (
               <div className="absolute inset-0 flex items-center justify-center text-white">
                 <div className="text-center">
                   <Icon name="Video" size={48} className="mx-auto mb-4" />
@@ -272,8 +298,6 @@ const IncomingCall = ({ callData, onAccept, onReject }: IncomingCallProps) => {
     return (
       <Dialog open={true} onOpenChange={handleEndCall}>
         <DialogContent className="max-w-md">
-          <audio ref={remoteAudioRef} autoPlay />
-          
           <div className="flex flex-col items-center justify-center py-8 space-y-6">
             <Avatar className="h-32 w-32">
               <AvatarImage src={callData.callerAvatar} />
@@ -285,7 +309,7 @@ const IncomingCall = ({ callData, onAccept, onReject }: IncomingCallProps) => {
             <div className="text-center">
               <h2 className="text-2xl font-bold mb-2">{callData.callerDisplayName}</h2>
               <p className="text-muted-foreground">
-                {isConnected ? formatDuration(callDuration) : connectionStatus}
+                {remoteUsers.size > 0 ? formatDuration(callDuration) : connectionStatus}
               </p>
             </div>
 
@@ -318,7 +342,7 @@ const IncomingCall = ({ callData, onAccept, onReject }: IncomingCallProps) => {
     <Dialog open={true} onOpenChange={handleReject}>
       <DialogContent className="max-w-md">
         <div className="flex flex-col items-center justify-center py-8 space-y-6">
-          <Avatar className="h-32 w-32">
+          <Avatar className="h-32 w-32 ring-4 ring-green-500 ring-offset-4 animate-pulse">
             <AvatarImage src={callData.callerAvatar} />
             <AvatarFallback className="bg-primary text-primary-foreground text-3xl font-medium">
               {getInitials(callData.callerDisplayName)}
@@ -327,12 +351,12 @@ const IncomingCall = ({ callData, onAccept, onReject }: IncomingCallProps) => {
 
           <div className="text-center">
             <h2 className="text-2xl font-bold mb-2">{callData.callerDisplayName}</h2>
-            <p className="text-muted-foreground">
-              {callData.callType === 'video' ? 'Видеозвонок' : 'Аудиозвонок'}
+            <p className="text-muted-foreground text-lg">
+              {callData.callType === 'video' ? '📹 Видеозвонок' : '📞 Аудиозвонок'}
             </p>
           </div>
 
-          <div className="flex gap-4">
+          <div className="flex gap-6">
             <Button
               onClick={handleReject}
               variant="destructive"
@@ -344,7 +368,6 @@ const IncomingCall = ({ callData, onAccept, onReject }: IncomingCallProps) => {
             
             <Button
               onClick={handleAccept}
-              variant="default"
               size="icon"
               className="h-16 w-16 rounded-full bg-green-500 hover:bg-green-600"
             >
@@ -352,9 +375,9 @@ const IncomingCall = ({ callData, onAccept, onReject }: IncomingCallProps) => {
             </Button>
           </div>
 
-          <div className="flex items-center gap-2 text-sm text-muted-foreground animate-pulse">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Icon name="Phone" size={16} className="animate-bounce" />
-            <span>Входящий звонок...</span>
+            <span className="animate-pulse">Входящий звонок...</span>
           </div>
         </div>
       </DialogContent>
@@ -362,4 +385,4 @@ const IncomingCall = ({ callData, onAccept, onReject }: IncomingCallProps) => {
   );
 };
 
-export default IncomingCall;
+export default AgoraIncomingCall;

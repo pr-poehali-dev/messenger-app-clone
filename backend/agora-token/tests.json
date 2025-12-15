@@ -1,0 +1,20 @@
+{
+  "tests": [
+    {
+      "name": "Generate token for channel",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "channelName": "test-channel-123",
+        "uid": 1
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "token": {},
+        "appId": {},
+        "channelName": "test-channel-123"
+      },
+      "bodyMatcher": "keyMatch"
+    }
+  ]
+}
