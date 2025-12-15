@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import Icon from '@/components/ui/icon';
 import VideoCall from '@/components/VideoCall';
+import AudioCall from '@/components/AudioCall';
 import { api, User, Message, Chat } from '@/lib/api';
 import { toast } from '@/hooks/use-toast';
 
@@ -27,6 +28,7 @@ const Index = () => {
   const [profileName, setProfileName] = useState('');
   const [profileBio, setProfileBio] = useState('');
   const [showVideoCall, setShowVideoCall] = useState(false);
+  const [showAudioCall, setShowAudioCall] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagePollingRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -278,6 +280,14 @@ const Index = () => {
         recipientName={selectedChatUser?.displayName || ''}
       />
 
+      <AudioCall
+        isOpen={showAudioCall}
+        onClose={() => setShowAudioCall(false)}
+        initiator={true}
+        recipientName={selectedChatUser?.displayName || ''}
+        recipientAvatar={selectedChatUser?.avatarUrl}
+      />
+
       <div className="flex h-screen bg-background">
         <div className="w-full md:w-96 border-r border-border flex flex-col">
           <div className="p-4 border-b border-border">
@@ -370,6 +380,9 @@ const Index = () => {
                   <h2 className="font-semibold">{selectedChatUser.displayName}</h2>
                   <p className="text-xs text-muted-foreground">@{selectedChatUser.username}</p>
                 </div>
+                <Button variant="ghost" size="icon" onClick={() => setShowAudioCall(true)}>
+                  <Icon name="Phone" size={20} />
+                </Button>
                 <Button variant="ghost" size="icon" onClick={() => setShowVideoCall(true)}>
                   <Icon name="Video" size={20} />
                 </Button>
