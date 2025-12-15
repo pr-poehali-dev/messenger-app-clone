@@ -3,97 +3,138 @@ import SimplePeer from 'simple-peer';
 import { Button } from '@/components/ui/button';
 import Icon from '@/components/ui/icon';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { api } from '@/lib/api';
 
 interface VideoCallProps {
   isOpen: boolean;
   onClose: () => void;
-  initiator: boolean;
+  currentUserId: number;
+  recipientId: number;
   recipientName: string;
-  onSignal?: (signal: SimplePeer.SignalData) => void;
-  incomingSignal?: SimplePeer.SignalData;
 }
 
-const VideoCall = ({ isOpen, onClose, initiator, recipientName, onSignal, incomingSignal }: VideoCallProps) => {
+const VideoCall = ({ isOpen, onClose, currentUserId, recipientId, recipientName }: VideoCallProps) => {
   const [peer, setPeer] = useState<SimplePeer.Instance | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('Инициализация...');
+  const [callId, setCallId] = useState<number | null>(null);
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const signalCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      cleanup();
+      return;
+    }
 
-    const initPeer = async () => {
-      try {
-        const mediaStream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true,
-        });
-        
-        setStream(mediaStream);
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = mediaStream;
-        }
-
-        const peerInstance = new SimplePeer({
-          initiator,
-          trickle: false,
-          stream: mediaStream,
-          config: {
-            iceServers: [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' },
-            ],
-          },
-        });
-
-        peerInstance.on('signal', (signal) => {
-          if (onSignal) {
-            onSignal(signal);
-          }
-        });
-
-        peerInstance.on('stream', (remoteStream) => {
-          setRemoteStream(remoteStream);
-          if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = remoteStream;
-          }
-        });
-
-        peerInstance.on('error', (err) => {
-          console.error('Peer error:', err);
-        });
-
-        setPeer(peerInstance);
-
-        if (incomingSignal && !initiator) {
-          peerInstance.signal(incomingSignal);
-        }
-      } catch (error) {
-        console.error('Error accessing media devices:', error);
-      }
-    };
-
-    initPeer();
+    initCall();
 
     return () => {
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-      }
-      if (peer) {
-        peer.destroy();
-      }
+      cleanup();
     };
-  }, [isOpen, initiator]);
+  }, [isOpen]);
 
-  useEffect(() => {
-    if (peer && incomingSignal && initiator) {
-      peer.signal(incomingSignal);
+  const cleanup = () => {
+    if (signalCheckIntervalRef.current) {
+      clearInterval(signalCheckIntervalRef.current);
     }
-  }, [incomingSignal, peer, initiator]);
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+    }
+    if (peer) {
+      peer.destroy();
+    }
+    if (callId) {
+      api.endCall(callId).catch(console.error);
+    }
+    setConnectionStatus('Инициализация...');
+    setCallId(null);
+  };
+
+  const initCall = async () => {
+    try {
+      setConnectionStatus('Получение доступа к камере...');
+      
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
+      
+      setStream(mediaStream);
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = mediaStream;
+      }
+      setConnectionStatus('Установка соединения...');
+
+      const peerInstance = new SimplePeer({
+        initiator: true,
+        trickle: false,
+        stream: mediaStream,
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+          ],
+        },
+      });
+
+      peerInstance.on('signal', async (signal) => {
+        try {
+          const newCallId = await api.createCall(currentUserId, recipientId, 'video', signal);
+          setCallId(newCallId);
+          setConnectionStatus('Ожидание ответа...');
+          
+          signalCheckIntervalRef.current = setInterval(async () => {
+            try {
+              const updatedCall = await api.getIncomingCall(currentUserId);
+              if (updatedCall && updatedCall.answerSignal && updatedCall.id === newCallId) {
+                clearInterval(signalCheckIntervalRef.current!);
+                peerInstance.signal(updatedCall.answerSignal);
+              }
+            } catch (err) {
+              console.error('Error checking for answer:', err);
+            }
+          }, 1000);
+        } catch (error) {
+          console.error('Error creating call:', error);
+          setConnectionStatus('Ошибка создания звонка');
+        }
+      });
+
+      peerInstance.on('stream', (remoteStream) => {
+        setRemoteStream(remoteStream);
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = remoteStream;
+        }
+        setConnectionStatus('Подключено');
+      });
+
+      peerInstance.on('connect', () => {
+        setConnectionStatus('Соединено');
+      });
+
+      peerInstance.on('error', (err) => {
+        console.error('Peer error:', err);
+        setConnectionStatus('Ошибка соединения');
+      });
+
+      peerInstance.on('close', () => {
+        setConnectionStatus('Звонок завершен');
+        endCall();
+      });
+
+      setPeer(peerInstance);
+    } catch (error) {
+      console.error('Error accessing media:', error);
+      setConnectionStatus('Ошибка доступа к камере');
+    }
+  };
 
   const toggleMute = () => {
     if (stream) {
@@ -114,12 +155,7 @@ const VideoCall = ({ isOpen, onClose, initiator, recipientName, onSignal, incomi
   };
 
   const endCall = () => {
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-    }
-    if (peer) {
-      peer.destroy();
-    }
+    cleanup();
     onClose();
   };
 
@@ -150,7 +186,7 @@ const VideoCall = ({ isOpen, onClose, initiator, recipientName, onSignal, incomi
             <div className="absolute inset-0 flex items-center justify-center text-white">
               <div className="text-center">
                 <Icon name="Phone" size={48} className="mx-auto mb-4" />
-                <p className="text-lg">Соединение...</p>
+                <p className="text-lg">{connectionStatus}</p>
               </div>
             </div>
           )}

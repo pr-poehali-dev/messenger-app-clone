@@ -1,0 +1,30 @@
+{
+  "tests": [
+    {
+      "name": "Create audio call",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "callerId": 1,
+        "receiverId": 2,
+        "callType": "audio",
+        "signalData": {"type": "offer", "sdp": "test"}
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "callId": {}
+      },
+      "bodyMatcher": "keyMatch"
+    },
+    {
+      "name": "Get incoming calls",
+      "method": "GET",
+      "path": "/?userId=2",
+      "expectedStatus": 200,
+      "expectedBody": {
+        "call": {}
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}

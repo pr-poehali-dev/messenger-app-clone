@@ -4,145 +4,155 @@ import { Button } from '@/components/ui/button';
 import Icon from '@/components/ui/icon';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { api } from '@/lib/api';
 
 interface AudioCallProps {
   isOpen: boolean;
   onClose: () => void;
-  initiator: boolean;
+  currentUserId: number;
+  recipientId: number;
   recipientName: string;
   recipientAvatar?: string;
-  onSignal?: (signal: SimplePeer.SignalData) => void;
-  incomingSignal?: SimplePeer.SignalData;
 }
 
-const AudioCall = ({ isOpen, onClose, initiator, recipientName, recipientAvatar, onSignal, incomingSignal }: AudioCallProps) => {
+const AudioCall = ({ isOpen, onClose, currentUserId, recipientId, recipientName, recipientAvatar }: AudioCallProps) => {
   const [peer, setPeer] = useState<SimplePeer.Instance | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
-  const [connectionStatus, setConnectionStatus] = useState('Соединение...');
+  const [connectionStatus, setConnectionStatus] = useState('Инициализация...');
+  const [callId, setCallId] = useState<number | null>(null);
   
-  const localAudioRef = useRef<HTMLAudioElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const callStartTimeRef = useRef<number | null>(null);
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const signalCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
-      if (durationIntervalRef.current) {
-        clearInterval(durationIntervalRef.current);
-      }
-      setCallDuration(0);
-      setIsConnected(false);
-      setConnectionStatus('Соединение...');
+      cleanup();
       return;
     }
 
-    const initPeer = async () => {
-      try {
-        setConnectionStatus('Получение доступа к микрофону...');
-        
-        const mediaStream = await navigator.mediaDevices.getUserMedia({
-          video: false,
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        });
-        
-        setStream(mediaStream);
-        setConnectionStatus('Установка соединения...');
-
-        const peerInstance = new SimplePeer({
-          initiator,
-          trickle: false,
-          stream: mediaStream,
-          config: {
-            iceServers: [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' },
-              { urls: 'stun:stun2.l.google.com:19302' },
-              { urls: 'stun:stun3.l.google.com:19302' },
-              { urls: 'stun:stun4.l.google.com:19302' },
-            ],
-          },
-        });
-
-        peerInstance.on('signal', (signal) => {
-          console.log('Signal generated:', signal.type);
-          if (onSignal) {
-            onSignal(signal);
-          }
-        });
-
-        peerInstance.on('stream', (remoteStream) => {
-          console.log('Remote stream received');
-          if (remoteAudioRef.current) {
-            remoteAudioRef.current.srcObject = remoteStream;
-            remoteAudioRef.current.play().catch(err => console.error('Error playing remote audio:', err));
-          }
-          setIsConnected(true);
-          setConnectionStatus('Подключено');
-          callStartTimeRef.current = Date.now();
-          
-          durationIntervalRef.current = setInterval(() => {
-            if (callStartTimeRef.current) {
-              const duration = Math.floor((Date.now() - callStartTimeRef.current) / 1000);
-              setCallDuration(duration);
-            }
-          }, 1000);
-        });
-
-        peerInstance.on('connect', () => {
-          console.log('Peer connected');
-          setConnectionStatus('Соединено');
-        });
-
-        peerInstance.on('error', (err) => {
-          console.error('Peer error:', err);
-          setConnectionStatus('Ошибка соединения');
-        });
-
-        peerInstance.on('close', () => {
-          console.log('Peer connection closed');
-          setConnectionStatus('Звонок завершен');
-        });
-
-        setPeer(peerInstance);
-
-        if (incomingSignal && !initiator) {
-          console.log('Signaling incoming signal (receiver)');
-          peerInstance.signal(incomingSignal);
-        }
-      } catch (error) {
-        console.error('Error accessing media devices:', error);
-        setConnectionStatus('Ошибка доступа к микрофону');
-      }
-    };
-
-    initPeer();
+    initCall();
 
     return () => {
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-      }
-      if (peer) {
-        peer.destroy();
-      }
-      if (durationIntervalRef.current) {
-        clearInterval(durationIntervalRef.current);
-      }
+      cleanup();
     };
-  }, [isOpen, initiator]);
+  }, [isOpen]);
 
-  useEffect(() => {
-    if (peer && incomingSignal && initiator) {
-      console.log('Signaling incoming signal (initiator)');
-      peer.signal(incomingSignal);
+  const cleanup = () => {
+    if (durationIntervalRef.current) {
+      clearInterval(durationIntervalRef.current);
     }
-  }, [incomingSignal, peer, initiator]);
+    if (signalCheckIntervalRef.current) {
+      clearInterval(signalCheckIntervalRef.current);
+    }
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+    }
+    if (peer) {
+      peer.destroy();
+    }
+    if (callId) {
+      api.endCall(callId).catch(console.error);
+    }
+    setCallDuration(0);
+    setIsConnected(false);
+    setConnectionStatus('Инициализация...');
+    setCallId(null);
+  };
+
+  const initCall = async () => {
+    try {
+      setConnectionStatus('Получение доступа к микрофону...');
+      
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: false,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      
+      setStream(mediaStream);
+      setConnectionStatus('Установка соединения...');
+
+      const peerInstance = new SimplePeer({
+        initiator: true,
+        trickle: false,
+        stream: mediaStream,
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+          ],
+        },
+      });
+
+      peerInstance.on('signal', async (signal) => {
+        try {
+          const newCallId = await api.createCall(currentUserId, recipientId, 'audio', signal);
+          setCallId(newCallId);
+          setConnectionStatus('Ожидание ответа...');
+          
+          signalCheckIntervalRef.current = setInterval(async () => {
+            try {
+              const updatedCall = await api.getIncomingCall(currentUserId);
+              if (updatedCall && updatedCall.answerSignal && updatedCall.id === newCallId) {
+                clearInterval(signalCheckIntervalRef.current!);
+                peerInstance.signal(updatedCall.answerSignal);
+              }
+            } catch (err) {
+              console.error('Error checking for answer:', err);
+            }
+          }, 1000);
+        } catch (error) {
+          console.error('Error creating call:', error);
+          setConnectionStatus('Ошибка создания звонка');
+        }
+      });
+
+      peerInstance.on('stream', (remoteStream) => {
+        if (remoteAudioRef.current) {
+          remoteAudioRef.current.srcObject = remoteStream;
+          remoteAudioRef.current.play().catch(err => console.error('Error playing audio:', err));
+        }
+        setIsConnected(true);
+        setConnectionStatus('Подключено');
+        callStartTimeRef.current = Date.now();
+        
+        durationIntervalRef.current = setInterval(() => {
+          if (callStartTimeRef.current) {
+            const duration = Math.floor((Date.now() - callStartTimeRef.current) / 1000);
+            setCallDuration(duration);
+          }
+        }, 1000);
+      });
+
+      peerInstance.on('connect', () => {
+        setConnectionStatus('Соединено');
+      });
+
+      peerInstance.on('error', (err) => {
+        console.error('Peer error:', err);
+        setConnectionStatus('Ошибка соединения');
+      });
+
+      peerInstance.on('close', () => {
+        setConnectionStatus('Звонок завершен');
+        endCall();
+      });
+
+      setPeer(peerInstance);
+    } catch (error) {
+      console.error('Error accessing media:', error);
+      setConnectionStatus('Ошибка доступа к микрофону');
+    }
+  };
 
   const toggleMute = () => {
     if (stream) {
@@ -154,15 +164,7 @@ const AudioCall = ({ isOpen, onClose, initiator, recipientName, recipientAvatar,
   };
 
   const endCall = () => {
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-    }
-    if (peer) {
-      peer.destroy();
-    }
-    if (durationIntervalRef.current) {
-      clearInterval(durationIntervalRef.current);
-    }
+    cleanup();
     onClose();
   };
 
@@ -184,7 +186,6 @@ const AudioCall = ({ isOpen, onClose, initiator, recipientName, recipientAvatar,
   return (
     <Dialog open={isOpen} onOpenChange={endCall}>
       <DialogContent className="max-w-md">
-        <audio ref={localAudioRef} autoPlay muted />
         <audio ref={remoteAudioRef} autoPlay />
         
         <div className="flex flex-col items-center justify-center py-8 space-y-6">

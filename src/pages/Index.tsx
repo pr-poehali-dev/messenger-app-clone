@@ -9,6 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import Icon from '@/components/ui/icon';
 import VideoCall from '@/components/VideoCall';
 import AudioCall from '@/components/AudioCall';
+import IncomingCall from '@/components/IncomingCall';
 import { api, User, Message, Chat } from '@/lib/api';
 import { toast } from '@/hooks/use-toast';
 
@@ -29,8 +30,10 @@ const Index = () => {
   const [profileBio, setProfileBio] = useState('');
   const [showVideoCall, setShowVideoCall] = useState(false);
   const [showAudioCall, setShowAudioCall] = useState(false);
+  const [incomingCall, setIncomingCall] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagePollingRef = useRef<NodeJS.Timeout | null>(null);
+  const callPollingRef = useRef<NodeJS.Timeout | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -43,7 +46,24 @@ const Index = () => {
   useEffect(() => {
     if (currentUser) {
       loadChats();
+      
+      callPollingRef.current = setInterval(async () => {
+        try {
+          const call = await api.getIncomingCall(currentUser.id);
+          if (call) {
+            setIncomingCall(call);
+          }
+        } catch (error) {
+          console.error('Error checking for calls:', error);
+        }
+      }, 2000);
     }
+    
+    return () => {
+      if (callPollingRef.current) {
+        clearInterval(callPollingRef.current);
+      }
+    };
   }, [currentUser]);
 
   useEffect(() => {
@@ -273,19 +293,31 @@ const Index = () => {
         </DialogContent>
       </Dialog>
 
-      <VideoCall
-        isOpen={showVideoCall}
-        onClose={() => setShowVideoCall(false)}
-        initiator={true}
-        recipientName={selectedChatUser?.displayName || ''}
-      />
+      {currentUser && selectedChatUser && (
+        <>
+          <VideoCall
+            isOpen={showVideoCall}
+            onClose={() => setShowVideoCall(false)}
+            currentUserId={currentUser.id}
+            recipientId={selectedChatUser.userId}
+            recipientName={selectedChatUser.displayName}
+          />
 
-      <AudioCall
-        isOpen={showAudioCall}
-        onClose={() => setShowAudioCall(false)}
-        initiator={true}
-        recipientName={selectedChatUser?.displayName || ''}
-        recipientAvatar={selectedChatUser?.avatarUrl}
+          <AudioCall
+            isOpen={showAudioCall}
+            onClose={() => setShowAudioCall(false)}
+            currentUserId={currentUser.id}
+            recipientId={selectedChatUser.userId}
+            recipientName={selectedChatUser.displayName}
+            recipientAvatar={selectedChatUser.avatarUrl}
+          />
+        </>
+      )}
+
+      <IncomingCall
+        callData={incomingCall}
+        onAccept={() => {}}
+        onReject={() => setIncomingCall(null)}
       />
 
       <div className="flex h-screen bg-background">

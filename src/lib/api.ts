@@ -3,6 +3,7 @@ const API_URLS = {
   chats: 'https://functions.poehali.dev/cb03a0c9-cd90-421d-ba3e-3eef147370f0',
   users: 'https://functions.poehali.dev/eb960cd0-7038-464e-8626-1797e286081d',
   messages: 'https://functions.poehali.dev/abd31001-0799-468b-9713-72247f86ac24',
+  calls: 'https://functions.poehali.dev/778f4fa7-2d82-476f-8d0c-4fc3ad17535f',
 };
 
 export interface User {
@@ -85,5 +86,35 @@ export const api = {
     });
     const data = await response.json();
     return data.message;
+  },
+
+  async createCall(callerId: number, receiverId: number, callType: 'audio' | 'video', signalData: any): Promise<number> {
+    const response = await fetch(API_URLS.calls, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callerId, receiverId, callType, signalData }),
+    });
+    const data = await response.json();
+    return data.callId;
+  },
+
+  async getIncomingCall(userId: number): Promise<any> {
+    const response = await fetch(`${API_URLS.calls}?userId=${userId}`);
+    const data = await response.json();
+    return data.call;
+  },
+
+  async updateCall(callId: number, status?: string, answerSignal?: any): Promise<void> {
+    await fetch(API_URLS.calls, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callId, status, answerSignal }),
+    });
+  },
+
+  async endCall(callId: number): Promise<void> {
+    await fetch(`${API_URLS.calls}?callId=${callId}`, {
+      method: 'DELETE',
+    });
   },
 };
