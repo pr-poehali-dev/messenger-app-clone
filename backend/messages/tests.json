@@ -1,0 +1,14 @@
+{
+  "tests": [
+    {
+      "name": "Get messages",
+      "method": "GET",
+      "path": "/?user1Id=1&user2Id=2",
+      "expectedStatus": 200,
+      "expectedBody": {
+        "messages": []
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}

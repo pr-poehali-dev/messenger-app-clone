@@ -1,0 +1,18 @@
+{
+  "tests": [
+    {
+      "name": "Search users",
+      "method": "GET",
+      "path": "/?search=alex",
+      "expectedStatus": 200,
+      "expectedBody": {
+        "data": [
+          {
+            "username": "string"
+          }
+        ]
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}
